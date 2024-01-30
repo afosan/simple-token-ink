@@ -2,141 +2,84 @@
 
 #[ink::contract]
 mod simple_token_ink {
+    use ink::storage::Mapping;
 
-    /// Defines the storage of your contract.
-    /// Add new fields to the below struct in order
-    /// to add new static storage fields to your contract.
     #[ink(storage)]
-    pub struct SimpleTokenInk {
-        /// Stores a single `bool` value on the storage.
-        value: bool,
+    #[derive(Default)]
+    pub struct SimpleToken {
+        balances: Mapping<AccountId, Balance>,
+        total_supply: Balance,
     }
 
-    impl SimpleTokenInk {
-        /// Constructor that initializes the `bool` value to the given `init_value`.
+    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub enum Error {
+        InsufficientBalance,
+    }
+
+    impl SimpleToken {
         #[ink(constructor)]
-        pub fn new(init_value: bool) -> Self {
-            Self { value: init_value }
+        pub fn new(total_supply: Balance) -> Self {
+            let mut balances = Mapping::default();
+            let caller = Self::env().caller();
+            balances.insert(caller, &total_supply);
+            Self { balances, total_supply }
         }
 
-        /// Constructor that initializes the `bool` value to `false`.
-        ///
-        /// Constructors can delegate to other constructors.
-        #[ink(constructor)]
-        pub fn default() -> Self {
-            Self::new(Default::default())
-        }
-
-        /// A message that can be called on instantiated contracts.
-        /// This one flips the value of the stored `bool` from `true`
-        /// to `false` and vice versa.
         #[ink(message)]
-        pub fn flip(&mut self) {
-            self.value = !self.value;
+        pub fn total_supply(&self) -> Balance {
+            self.total_supply
         }
 
-        /// Simply returns the current value of our `bool`.
         #[ink(message)]
-        pub fn get(&self) -> bool {
-            self.value
+        pub fn balance_of(&self, account: AccountId) -> Balance {
+            self.balances.get(&account).unwrap_or_default()
+        }
+
+        #[ink(message)]
+        pub fn transfer(&mut self, to: AccountId, value: Balance) -> Result<(), Error> {
+            let from = self.env().caller();
+            let from_balance = self.balance_of(from);
+            if from_balance < value {
+                return Err(Error::InsufficientBalance);
+            }
+            let to_balance = self.balance_of(to);
+
+            self.balances.insert(from, &(from_balance - value));
+            self.balances.insert(to, &(to_balance + value));
+
+            Ok(())
         }
     }
 
-    /// Unit tests in Rust are normally defined within such a `#[cfg(test)]`
-    /// module and test functions are marked with a `#[test]` attribute.
-    /// The below code is technically just normal Rust code.
     #[cfg(test)]
     mod tests {
-        /// Imports all the definitions from the outer scope so we can use them here.
         use super::*;
 
-        /// We test if the default constructor does its job.
         #[ink::test]
-        fn default_works() {
-            let simple_token_ink = SimpleTokenInk::default();
-            assert_eq!(simple_token_ink.get(), false);
+        fn total_supply_works() {
+            let simple_token = SimpleToken::new(100);
+            assert_eq!(simple_token.total_supply(), 100);
         }
 
-        /// We test a simple use case of our contract.
         #[ink::test]
-        fn it_works() {
-            let mut simple_token_ink = SimpleTokenInk::new(false);
-            assert_eq!(simple_token_ink.get(), false);
-            simple_token_ink.flip();
-            assert_eq!(simple_token_ink.get(), true);
-        }
-    }
-
-
-    /// This is how you'd write end-to-end (E2E) or integration tests for ink! contracts.
-    ///
-    /// When running these you need to make sure that you:
-    /// - Compile the tests with the `e2e-tests` feature flag enabled (`--features e2e-tests`)
-    /// - Are running a Substrate node which contains `pallet-contracts` in the background
-    #[cfg(all(test, feature = "e2e-tests"))]
-    mod e2e_tests {
-        /// Imports all the definitions from the outer scope so we can use them here.
-        use super::*;
-
-        /// A helper function used for calling contract messages.
-        use ink_e2e::build_message;
-
-        /// The End-to-End test `Result` type.
-        type E2EResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-        /// We test that we can upload and instantiate the contract using its default constructor.
-        #[ink_e2e::test]
-        async fn default_works(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
-            // Given
-            let constructor = SimpleTokenInkRef::default();
-
-            // When
-            let contract_account_id = client
-                .instantiate("simple_token_ink", &ink_e2e::alice(), constructor, 0, None)
-                .await
-                .expect("instantiate failed")
-                .account_id;
-
-            // Then
-            let get = build_message::<SimpleTokenInkRef>(contract_account_id.clone())
-                .call(|simple_token_ink| simple_token_ink.get());
-            let get_result = client.call_dry_run(&ink_e2e::alice(), &get, 0, None).await;
-            assert!(matches!(get_result.return_value(), false));
-
-            Ok(())
+        fn balance_of_works() {
+            let simple_token = SimpleToken::new(100);
+            let accounts =
+                ink::env::test::default_accounts::<ink::env::DefaultEnvironment>();
+            assert_eq!(simple_token.balance_of(accounts.alice), 100);
+            assert_eq!(simple_token.balance_of(accounts.bob), 0);
         }
 
-        /// We test that we can read and write a value from the on-chain contract contract.
-        #[ink_e2e::test]
-        async fn it_works(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
-            // Given
-            let constructor = SimpleTokenInkRef::new(false);
-            let contract_account_id = client
-                .instantiate("simple_token_ink", &ink_e2e::bob(), constructor, 0, None)
-                .await
-                .expect("instantiate failed")
-                .account_id;
+        #[ink::test]
+        fn transfer_works() {
+            let mut simple_token = SimpleToken::new(100);
+            let accounts =
+                ink::env::test::default_accounts::<ink::env::DefaultEnvironment>();
 
-            let get = build_message::<SimpleTokenInkRef>(contract_account_id.clone())
-                .call(|simple_token_ink| simple_token_ink.get());
-            let get_result = client.call_dry_run(&ink_e2e::bob(), &get, 0, None).await;
-            assert!(matches!(get_result.return_value(), false));
-
-            // When
-            let flip = build_message::<SimpleTokenInkRef>(contract_account_id.clone())
-                .call(|simple_token_ink| simple_token_ink.flip());
-            let _flip_result = client
-                .call(&ink_e2e::bob(), flip, 0, None)
-                .await
-                .expect("flip failed");
-
-            // Then
-            let get = build_message::<SimpleTokenInkRef>(contract_account_id.clone())
-                .call(|simple_token_ink| simple_token_ink.get());
-            let get_result = client.call_dry_run(&ink_e2e::bob(), &get, 0, None).await;
-            assert!(matches!(get_result.return_value(), true));
-
-            Ok(())
+            assert_eq!(simple_token.balance_of(accounts.bob), 0);
+            assert_eq!(simple_token.transfer(accounts.bob, 10), Ok(()));
+            assert_eq!(simple_token.balance_of(accounts.bob), 10);
         }
     }
 }
